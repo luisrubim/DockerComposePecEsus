@@ -1,0 +1,8 @@
+certs/
+*.key
+*.p12
+*.crt
+.env
+pgdata/
+*.jar
+*.log

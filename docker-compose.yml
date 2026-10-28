@@ -1,0 +1,34 @@
+services:
+  pec:
+    build: ./pec
+    mem_limit: 3g
+    ports:
+      - "443:8443"
+    environment:
+      DB_PASSWORD: esus123
+      JAVA_TOOL_OPTIONS: "-Xmx2g"
+    volumes:
+      - pec_data:/opt/e-SUS
+      - ./certs:/certs:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    # ⚠️ use a versão de PostgreSQL compatível com a 5.5.28
+    image: postgres:12
+    mem_limit: 1g
+    environment:
+      POSTGRES_PASSWORD: esus123
+      POSTGRES_DB: esus
+    command: ["postgres", "-c", "shared_buffers=256MB"]
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pec_data:
+  db_data:
