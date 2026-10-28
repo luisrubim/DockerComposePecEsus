@@ -1,15 +1,53 @@
 # Ambiente Docker Compose: PEC e-SUS + PostgreSQL
 
 Ambiente local com o **PEC e-SUS APS** e um **PostgreSQL 12**, rodando via Docker Compose no WSL2.
+A versão do PEC é escolhida pela variável `PEC_VERSION` no arquivo `.env`.
+
+## Início rápido
+
+Na pasta do projeto, dentro do WSL:
+
+1. **Escolha a versão do PEC** criando o `.env`:
+
+   ```bash
+   cp .env.example .env      # edite PEC_VERSION se quiser outra versão
+   ```
+
+2. **Coloque o instalador do PEC** em `pec/`, com o nome exato `eSUS-AB-PEC-<PEC_VERSION>-Linux64.jar`.
+   Por exemplo: `pec/eSUS-AB-PEC-5.5.28-Linux64.jar`.
+   Baixe em <https://sisaps.saude.gov.br/esus/>. O `.jar` não é versionado no git.
+
+3. **Gere o certificado HTTPS** em `certs/localhost.p12` (senha `changeit`):
+
+   ```bash
+   mkdir -p certs
+   openssl req -x509 -newkey rsa:2048 -nodes \
+     -keyout certs/localhost.key -out certs/localhost.crt \
+     -days 730 -subj "/CN=localhost" \
+     -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+   openssl pkcs12 -export \
+     -in certs/localhost.crt -inkey certs/localhost.key \
+     -out certs/localhost.p12 -name localhost -passout pass:changeit
+   ```
+
+4. **Suba o ambiente:**
+
+   ```bash
+   docker compose up -d --build
+   docker compose logs -f pec
+   ```
+
+5. Aguarde o primeiro boot (**5 a 15 minutos**) e acesse **<https://localhost>**.
+
+Os detalhes de cada passo estão nas seções abaixo.
 
 ## Serviços
 
 | Serviço | Imagem | Porta no host | Observação |
 |---------|--------|---------------|------------|
 | `db`    | `postgres:12` | não exposta (só `5432` interna) | Banco `esus`, usuário `postgres`, senha `esus123` |
-| `pec`   | build local (`dockercomposepecesus-pec`) | `443` -> `8443` do container (HTTPS) | Sobe o `pec-bundle.jar` via `/entrypoint.sh` |
+| `pec`   | build local (`pec-esus:<PEC_VERSION>`) | `443` -> `8443` do container (HTTPS) | Instala o `.jar` na 1ª subida e roda o `standalone.sh` |
 
-> Ajuste as credenciais acima se você alterou o `docker-compose.yml`.
 > Em qualquer ambiente fora do seu computador, troque a senha `esus123`.
 
 ## Requisitos
@@ -17,7 +55,7 @@ Ambiente local com o **PEC e-SUS APS** e um **PostgreSQL 12**, rodando via Docke
 - Windows 10/11 com **WSL2** e uma distro Linux (Ubuntu, por exemplo)
 - **Docker Desktop** com integração com o WSL2 ativada (ou Docker Engine dentro do WSL)
 - **OpenSSL** (já vem no Ubuntu; confira com `openssl version`)
-- Pelo menos **8 GB de RAM** livres para o WSL (o PEC usa ~3 GB, podendo chegar a 4 GB de heap)
+- Pelo menos **6 GB de RAM** livres para o WSL (o compose limita o PEC a 3 GB, com heap `-Xmx2g`, e o banco a 1 GB)
 - Porta **443** livre no Windows (IIS, Skype, VPNs e outros serviços podem ocupá-la)
 
 ### Configurar memória do WSL
@@ -36,123 +74,107 @@ Depois, no PowerShell:
 wsl --shutdown
 ```
 
-## Estrutura esperada do projeto
+## Estrutura do projeto
 
 ```
-DockerComposePecEsus/
+dockercomposepecesus/
 ├── docker-compose.yml
-├── Dockerfile            # imagem do PEC
-├── entrypoint.sh         # script de entrada do PEC
-├── certs/                # certificado HTTPS (gerado no passo abaixo)
-│   ├── pec.crt
-│   ├── pec.key
-│   └── pec.p12
-└── README.md
+├── .env.example                          # modelo do .env (versionado)
+├── .env                                  # você cria: PEC_VERSION (não versionado)
+├── pec/
+│   ├── Dockerfile
+│   ├── entrypoint.sh                     # instala o PEC e configura o HTTPS
+│   └── eSUS-AB-PEC-<versão>-Linux64.jar  # você coloca (não versionado)
+└── certs/
+    └── localhost.p12                     # você gera (não versionado)
 ```
 
-> A estrutura pode variar. Os nomes acima são a convenção usada neste README.
+## Escolher ou trocar a versão do PEC
 
-## 1. Gerar o certificado HTTPS
+A versão vem de `PEC_VERSION` no `.env`. O build copia `pec/eSUS-AB-PEC-${PEC_VERSION}-Linux64.jar`,
+e a imagem recebe a tag `pec-esus:<versão>`.
 
-O PEC responde em HTTPS (porta 8443 no container). Há duas formas de gerar o certificado.
+Para usar uma versão diferente só uma vez, sem editar o `.env`:
+
+```bash
+PEC_VERSION=5.5.30 docker compose up -d --build            # bash/WSL
+```
+
+```powershell
+$env:PEC_VERSION="5.5.30"; docker compose up -d --build    # PowerShell
+```
+
+### Trocar a versão de uma instalação existente
+
+O PEC é instalado **só na primeira subida**, e a instalação fica guardada no volume `pec_data`.
+Se você pedir uma versão diferente da que está instalada, o container para com erro de propósito.
+Para reinstalar:
+
+```bash
+# 1. coloque o novo .jar em pec/ e ajuste PEC_VERSION no .env
+docker compose down
+docker volume rm dockercomposepecesus_pec_data   # remove só a instalação do PEC; o banco (db_data) é mantido
+docker compose up -d --build
+```
+
+> Confira o nome do volume com `docker volume ls`. O prefixo é o nome da pasta do projeto.
+> Confira também se a nova versão do PEC é compatível com o PostgreSQL usado no `docker-compose.yml`.
+
+## Certificado HTTPS
+
+O PEC responde em HTTPS (porta 8443 no container). O `docker-compose.yml` já monta `./certs` em `/certs`,
+e o `entrypoint.sh` já configura o PEC para usar `/certs/localhost.p12` com a senha `changeit`.
+**Basta gerar o arquivo com esse nome.**
 
 ### Opção A: autoassinado com OpenSSL (simples)
 
-O navegador vai exibir um aviso de segurança na primeira visita, que pode ser ignorado em ambiente local.
-
-```bash
-mkdir -p certs && cd certs
-
-# Chave privada + certificado (válido por ~2 anos) para localhost
-openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout pec.key -out pec.crt \
-  -days 730 \
-  -subj "/CN=localhost" \
-  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
-
-# Keystore PKCS12 (formato aceito por aplicações Java)
-openssl pkcs12 -export \
-  -in pec.crt -inkey pec.key \
-  -out pec.p12 -name pec \
-  -passout pass:changeit
-
-cd ..
-```
-
-Resultado: `pec.crt`, `pec.key` e `pec.p12` (senha do keystore: `changeit`).
+É o comando do [Início rápido](#início-rápido). O navegador exibe um aviso de segurança na primeira visita,
+que pode ser ignorado em ambiente local.
 
 ### Opção B: com `mkcert` (sem aviso no navegador)
 
-O `mkcert` cria uma autoridade certificadora local e confiável no seu sistema.
+O `mkcert` cria uma autoridade certificadora local, confiável no seu sistema.
 
-No **Windows** (PowerShell, uma vez):
+No **Windows** (PowerShell, uma vez só):
 
 ```powershell
 winget install FiloSottile.mkcert
 mkcert -install
 ```
 
-Depois, gere o certificado (no Windows, na pasta do projeto, para o navegador do Windows confiar):
+Gere o certificado no Windows, na pasta do projeto, para que o navegador do Windows confie nele:
 
 ```powershell
 mkdir certs
-cd certs
-mkcert -cert-file pec.crt -key-file pec.key localhost 127.0.0.1 ::1
+mkcert -cert-file certs/localhost.crt -key-file certs/localhost.key localhost 127.0.0.1 ::1
 ```
 
-Converta para PKCS12 (no WSL, dentro da pasta `certs`):
+Converta para PKCS12 no WSL, na pasta do projeto:
 
 ```bash
-openssl pkcs12 -export -in pec.crt -inkey pec.key -out pec.p12 -name pec -passout pass:changeit
+openssl pkcs12 -export -in certs/localhost.crt -inkey certs/localhost.key \
+  -out certs/localhost.p12 -name localhost -passout pass:changeit
 ```
 
-## 2. Disponibilizar o certificado ao container
-
-Monte a pasta `certs` no serviço `pec` do `docker-compose.yml`:
-
-```yaml
-services:
-  pec:
-    # ...
-    ports:
-      - "443:8443"
-    volumes:
-      - ./certs:/certs:ro
-```
-
-E aponte a configuração SSL do PEC para o keystore `/certs/pec.p12` (senha `changeit`, alias `pec`).
-O local dessa configuração depende da versão do PEC e do seu `Dockerfile`/`entrypoint.sh`
-(normalmente um arquivo de propriedades do `pec-bundle.jar` ou variáveis de ambiente lidas pelo entrypoint).
-Confira onde o seu entrypoint lê o keystore e ajuste o caminho e a senha conforme necessário.
-
-## 3. Subir o ambiente
-
-Na pasta do projeto, dentro do WSL:
+## Subir e verificar
 
 ```bash
 docker compose up -d --build
-```
-
-Para acompanhar:
-
-```bash
 docker compose ps
 docker compose logs -f pec
 ```
 
 > O `pec` imprime o banner do e-SUS e fica **bem silencioso** no log. Isso é normal.
 
-### Verificar se já subiu
-
-O **primeiro boot é lento (5 a 15 minutos)**: o PEC carrega o servidor de aplicação e executa as migrações do banco.
-Teste a porta:
+O **primeiro boot é lento (5 a 15 minutos)**: o PEC instala, carrega o servidor de aplicação e executa as migrações do banco.
+Para testar a porta:
 
 ```bash
 curl -k -s -o /dev/null -w "%{http_code}\n" https://localhost
 ```
 
 - `000`: ainda subindo
-- `200`, `302`, `404` ou qualquer código HTTP: está no ar
+- `200`, `302`, `404` ou qualquer outro código HTTP: está no ar
 
 Para repetir a cada 30 segundos:
 
@@ -160,13 +182,13 @@ Para repetir a cada 30 segundos:
 watch -n 30 'curl -k -s -o /dev/null -w "%{http_code}\n" https://localhost'
 ```
 
-Confirme também que o processo Java está vivo:
+Para confirmar que o processo Java está vivo:
 
 ```bash
 docker compose exec pec ps aux | grep java
 ```
 
-## 4. Acessar o PEC
+## Acessar o PEC
 
 Abra no navegador:
 
@@ -179,9 +201,9 @@ https://localhost
 
 Se `localhost` não funcionar no Windows, pegue o IP do WSL com `hostname -I` e acesse `https://<IP>`.
 
-## 5. Acessar o PostgreSQL
+## Acessar o PostgreSQL
 
-O PostgreSQL **não tem interface web** e, por padrão, **não está exposto ao host**.
+O PostgreSQL **não tem interface web** e, por padrão, **não fica exposto ao host**.
 
 ### Pelo terminal (sem alterar nada)
 
@@ -246,26 +268,28 @@ docker compose logs -f pec        # log do PEC
 docker compose logs -f db         # log do banco
 docker compose restart pec        # reiniciar só o PEC
 docker compose stop               # parar sem remover
-docker compose down               # parar e remover containers (mantém dados)
-docker compose down -v            # CUIDADO: remove também os volumes (apaga o banco)
-docker compose up -d --build      # recriar a imagem do PEC após mudar o Dockerfile
+docker compose down               # parar e remover os containers (mantém os dados)
+docker compose down -v            # CUIDADO: remove também os volumes (apaga o banco e a instalação do PEC)
+docker compose up -d --build      # recriar a imagem do PEC após mudar o Dockerfile ou a versão
 ```
 
 ## Solução de problemas
 
 | Sintoma | Causa provável | O que fazer |
 |---------|----------------|-------------|
-| `https://localhost` não responde logo após o `up` | Boot do PEC ainda em andamento | Aguarde e use o `curl` da seção 3 |
-| Aviso "conexão não é particular" | Certificado autoassinado | Avançar no navegador ou usar `mkcert` |
+| `required variable PEC_VERSION is missing a value` | `.env` não existe | `cp .env.example .env` |
+| Build falha no `COPY eSUS-AB-PEC-...-Linux64.jar` | `.jar` ausente ou com nome diferente em `pec/` | Confira se o nome bate exatamente com `PEC_VERSION` |
+| `ERRO: o volume pec_data tem o PEC X instalado...` | Versão no `.env` diferente da instalada | Volte a versão ou reinstale (veja [Trocar a versão](#trocar-a-versão-de-uma-instalação-existente)) |
+| Erro de certificado/keystore no log | Arquivo não está em `certs/localhost.p12` ou a senha não é `changeit` | Gere de novo com o comando do Início rápido |
+| `https://localhost` não responde logo após o `up` | Boot do PEC ainda em andamento | Aguarde e use o `curl` da seção "Subir e verificar" |
+| Aviso "conexão não é particular" | Certificado autoassinado | Avance no navegador ou use o `mkcert` |
 | Erro de porta 443 ocupada | Outro programa usa a 443 no Windows | Mude para `"8443:8443"` e acesse `https://localhost:8443` |
 | PEC cai ou o WSL fica lento | Falta de memória | Aumente `memory` no `.wslconfig` |
-| `syntax error near unexpected token 'newline'` | `<usuario>`/`<banco>` copiados literalmente | Troque pelos valores reais (`postgres` e `esus`) |
-| Banner do e-SUS aparece duas vezes no log | Wrapper chamando o launcher | Normal, não é loop. Confira com `docker compose ps` |
-| Erro de certificado/keystore no log | Caminho ou senha do `.p12` incorretos | Revise o volume `./certs:/certs` e a senha `changeit` |
+| Banner do e-SUS aparece duas vezes no log | Wrapper chamando o launcher | É normal, não é loop. Confira com `docker compose ps` |
 
 ### Ver os logs internos do PEC
 
-O PEC grava logs em arquivo, não no stdout:
+O PEC grava os logs em arquivo, não no stdout:
 
 ```bash
 docker compose exec pec find /opt/e-SUS -name "*.log"

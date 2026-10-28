@@ -1,6 +1,10 @@
 services:
   pec:
-    build: ./pec
+    build:
+      context: ./pec
+      args:
+        PEC_VERSION: "${PEC_VERSION:?Defina PEC_VERSION no .env (ex.: 5.5.28)}"
+    image: pec-esus:${PEC_VERSION}
     mem_limit: 3g
     ports:
       - "443:8443"
@@ -15,7 +19,7 @@ services:
         condition: service_healthy
 
   db:
-    # ⚠️ use a versão de PostgreSQL compatível com a 5.5.28
+    # ⚠️ use a versão de PostgreSQL compatível com a PEC_VERSION escolhida
     image: postgres:12
     mem_limit: 1g
     environment:

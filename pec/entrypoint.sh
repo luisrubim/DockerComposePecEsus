@@ -1,6 +1,19 @@
 #!/bin/sh
 set -e
 
+VERSION_FILE=/opt/e-SUS/.pec_version
+
+# Volume já instalado com outra versão: não roda uma versão achando que é outra
+if [ -d /opt/e-SUS/webserver ] && [ -f "$VERSION_FILE" ]; then
+  INSTALLED=$(cat "$VERSION_FILE")
+  if [ "$INSTALLED" != "$PEC_VERSION" ]; then
+    echo "ERRO: o volume pec_data tem o PEC $INSTALLED instalado, mas PEC_VERSION=$PEC_VERSION."
+    echo "Para reinstalar: docker compose down && docker volume rm <projeto>_pec_data"
+    echo "(ou volte PEC_VERSION para $INSTALLED no .env)"
+    exit 1
+  fi
+fi
+
 # Instala o PEC só na primeira subida (o volume guarda a instalação)
 if [ ! -d /opt/e-SUS/webserver ]; then
   java -jar /installer/pec.jar -console -continue \
@@ -13,6 +26,9 @@ if [ ! -d /opt/e-SUS/webserver ]; then
     exit 1
   fi
 fi
+
+# Instalações antigas (sem marcador) são tratadas como da versão atual
+[ -f "$VERSION_FILE" ] || echo "$PEC_VERSION" > "$VERSION_FILE"
 
 # ⚠️ confirme o caminho do arquivo dentro do /opt/e-SUS
 PROPS=/opt/e-SUS/webserver/config/application.properties
